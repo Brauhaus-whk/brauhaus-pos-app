@@ -24,6 +24,13 @@ jobs:
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-34" "build-tools;34.0.0"
 
+      - name: Signing key check
+        run: |
+          if [ ! -f app/brauhaus.keystore ]; then
+            echo "::error::app/brauhaus.keystore is missing. Upload the brauhaus.keystore file into the app folder."
+            exit 1
+          fi
+
       - name: Install Gradle
         run: |
           wget -q https://services.gradle.org/distributions/gradle-8.7-bin.zip
@@ -33,11 +40,11 @@ jobs:
         run: $HOME/gradle-8.7/bin/gradle assembleDebug --no-daemon --stacktrace
 
       - name: Rename APK
-        run: cp app/build/outputs/apk/debug/app-debug.apk BrauhausPOS-iMin.apk
+        run: cp app/build/outputs/apk/debug/app-debug.apk BrauhausPOS.apk
 
       - name: Publish download
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.0.${{ github.run_number }}
-          name: Brauhaus POS for iMin v1.0.${{ github.run_number }}
-          files: BrauhausPOS-iMin.apk
+          tag_name: v1.3.${{ github.run_number }}
+          name: Brauhaus POS v1.3.${{ github.run_number }} (printer + cashless QR/NFC)
+          files: BrauhausPOS.apk
