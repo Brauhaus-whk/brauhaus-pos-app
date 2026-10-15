@@ -9,7 +9,12 @@ import android.nfc.NfcAdapter;
 import android.nfc.Tag;
 import android.os.Build;
 import android.os.Bundle;
+import android.graphics.Color;
+import android.net.http.SslError;
 import android.webkit.CookieManager;
+import android.webkit.RenderProcessGoneDetail;
+import android.webkit.SslErrorHandler;
+import android.webkit.WebResourceResponse;
 import android.webkit.PermissionRequest;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceError;
@@ -33,16 +38,23 @@ import java.util.List;
  *   window.BrauhausScan       QR scanner + NFC reader for cashless cards (ScanBridge)
  */
 public class MainActivity extends Activity {
-    static final String VERSION = "1.3";
+    static final String VERSION = "1.3.1";
     static final String HOME = "https://brauhauspos.lockandkeyhome.com/";
     static final String HOST = "brauhauspos.lockandkeyhome.com";
     private static final int REQ_SCAN = 4711;
 
-    static final String OFFLINE =
-        "<html><body style='background:#0d0f14;color:#e2e8f0;font-family:sans-serif;text-align:center;padding-top:30%'>"
-        + "<h2 style='color:#e8b87a'>BRAUHAUS POS</h2><p>No connection to the server.</p>"
-        + "<button style='padding:14px 28px;font-size:16px;background:#e8b87a;border:0;border-radius:8px' "
-        + "onclick=\"location.href='" + HOME + "'\">Try again</button></body></html>";
+    /* A visible screen for every way loading can fail, so the device never
+       just shows black. The message says exactly what went wrong. */
+    static String screen(String title, String detail) {
+        return "<html><head><meta name='viewport' content='width=device-width,initial-scale=1'></head>"
+            + "<body style='background:#0d0f14;color:#e2e8f0;font-family:sans-serif;text-align:center;padding:22% 18px 0'>"
+            + "<h2 style='color:#e8b87a;margin:0 0 12px'>BRAUHAUS POS</h2><p style='font-size:17px'>" + title + "</p>"
+            + "<p style='font-size:13px;color:#8b9ab0;word-break:break-word'>" + detail + "</p>"
+            + "<button style='margin-top:18px;padding:14px 28px;font-size:16px;background:#e8b87a;border:0;border-radius:8px' "
+            + "onclick=\"location.href='" + HOME + "'\">Try again</button>"
+            + "<p style='font-size:12px;color:#55606f;margin-top:28px'>App " + VERSION + " &middot; " + Build.MANUFACTURER + " " + Build.MODEL
+            + " &middot; Android " + Build.VERSION.RELEASE + "</p></body></html>";
+    }
 
     private WebView web;
     private PrinterBridge printer;
@@ -54,6 +66,7 @@ public class MainActivity extends Activity {
     protected void onCreate(Bundle state) {
         super.onCreate(state);
         web = new WebView(this);
+        web.setBackgroundColor(Color.parseColor("#0d0f14"));
         setContentView(web);
 
         WebSettings s = web.getSettings();
@@ -100,7 +113,36 @@ public class MainActivity extends Activity {
 
             @Override
             public void onReceivedError(WebView v, WebResourceRequest r, WebResourceError e) {
-                if (r.isForMainFrame()) v.loadDataWithBaseURL(null, OFFLINE, "text/html", "utf-8", null);
+                if (r.isForMainFrame()) show(v, "No connection to the server.", "Error " + e.getErrorCode() + ": " + e.getDescription());
+            }
+
+            @Override
+            public void onReceivedHttpError(WebView v, WebResourceRequest r, WebResourceResponse resp) {
+                if (r.isForMainFrame() && resp.getStatusCode() >= 500)
+                    show(v, "The server answered with an error.", "HTTP " + resp.getStatusCode() + " " + resp.getReasonPhrase());
+            }
+
+            /* Most common cause of a blank screen on handhelds: the device clock is
+               wrong, so the website's security certificate looks invalid. */
+            @Override
+            public void onReceivedSslError(WebView v, SslErrorHandler h, SslError err) {
+                h.cancel();
+                show(v, "Secure connection failed.", "Check the date and time on this device (Settings > Date & time > automatic). Code " + err.getPrimaryError());
+            }
+
+            @Override
+            public boolean onRenderProcessGone(WebView v, RenderProcessGoneDetail d) {
+                recreate();
+                return true;
+            }
+
+            @Override
+            public void onPageFinished(WebView v, String url) {
+                /* If the page loaded but drew nothing (script failed), say so after 8 s. */
+                v.postDelayed(() -> v.evaluateJavascript(
+                    "(function(){var b=document.body;return b&&b.innerText.trim().length>0?'ok':'blank'})()",
+                    res -> { if ("\"blank\"".equals(res) && url != null && url.startsWith(HOME))
+                        show(v, "The page loaded but stayed empty.", "Update Android System WebView / Chrome in the app store, then try again. " + url); }), 8000);
             }
         });
 
@@ -171,6 +213,10 @@ public class MainActivity extends Activity {
     }
 
     /* -- helpers -- */
+
+    private void show(WebView v, String title, String detail) {
+        v.loadDataWithBaseURL(null, screen(title, detail.replace("<", "&lt;")), "text/html", "utf-8", null);
+    }
 
     private void js(String code) { if (web != null) web.evaluateJavascript(code, null); }
 
