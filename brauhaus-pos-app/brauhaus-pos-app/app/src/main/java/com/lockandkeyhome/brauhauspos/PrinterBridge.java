@@ -44,7 +44,7 @@ public class PrinterBridge {
     private static final String TAG = "BrauhausPrint";
     private static final UUID SPP = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB");
     private static final String SUNMI_PKG = "woyou.aidlservice.jiuiv5";
-    private static final String[] ROUTES = { "sunmi", "imin", "bt" };
+    private static final String[] ROUTES = { "sunmi", "imin", "imintext", "iminspi", "iminusb", "bt" };
 
     private final Context ctx;
     private final SharedPreferences prefs;
@@ -57,6 +57,8 @@ public class PrinterBridge {
 
     private volatile Object sunmi;
     private Object imin;
+    private Object iminOld;
+    private String iminOldType = "";
     private BluetoothSocket socket;
     private OutputStream out;
     private String btName = "";
@@ -106,11 +108,15 @@ public class PrinterBridge {
                     byte[] slip = slip(rt);
                     boolean ok = ready(rt) && send(rt, slip);
                     r.append(rt).append('=').append(ok ? "sent" : "failed: " + lastError).append('\n');
+                    if (rt.equals("imintext")) r.append("imin status=").append(iminStatus()).append('\n');
+                    try { Thread.sleep(1500); } catch (InterruptedException ignored) { }
                 }
                 return r.toString().trim();
-            }).get(60, TimeUnit.SECONDS);
+            }).get(120, TimeUnit.SECONDS);
         } catch (Throwable t) { return "selfTest error: " + t; }
     }
+
+    @JavascriptInterface public String routes() { return String.join(",", ROUTES); }
 
     @JavascriptInterface public String setRoute(final String r) {
         final String v = r == null ? "auto" : r.trim().toLowerCase();
@@ -156,7 +162,10 @@ public class PrinterBridge {
     private boolean ready(String rt) {
         switch (rt) {
             case "sunmi": return sunmiReady();
-            case "imin":  return iminReady();
+            case "imin":
+            case "imintext": return iminReady();
+            case "iminspi":  return iminOldReady("SPI");
+            case "iminusb":  return iminOldReady("USB");
             case "bt":    return out != null || btConnect();
             default: lastError = "unknown route " + rt; return false;
         }
@@ -166,7 +175,10 @@ public class PrinterBridge {
         try {
             switch (rt) {
                 case "sunmi": rawCall(sunmi, data); return true;
-                case "imin":  rawCall(imin, data);  return true;
+                case "imin":  rawCall(imin, data);  return iminCheck();
+                case "imintext": return iminText(data);
+                case "iminspi":
+                case "iminusb":  rawCall(iminOld, data); return true;
                 case "bt":    return btSend(data);
                 default: return false;
             }
@@ -203,19 +215,97 @@ public class PrinterBridge {
 
     private boolean iminReady() {
         if (imin != null) return true;
-        if (!hasIminService()) { lastError = "iMin print service not on this device"; return false; }
         try {
             Class<?> k = Class.forName("com.imin.printer.PrinterHelper");
             Object h = k.getMethod("getInstance").invoke(null);
             invokeAny(h, "initPrinterService", ctx);
-            Thread.sleep(1500);
-            invokeAny(h, "initPrinter", ctx.getPackageName(), null);
+            // binding is async: wait up to 5 s for the service to answer
+            for (int i = 0; i < 10; i++) {
+                Thread.sleep(500);
+                try { invokeAny(h, "initPrinter", ctx.getPackageName(), null); break; } catch (Throwable notYet) { }
+            }
             imin = h;
             return true;
         } catch (Throwable t) {
-            lastError = "iMin: " + root(t);
+            lastError = "iMin: " + root(t) + (hasIminService() ? "" : " (no iMin print service found)");
             return false;
         }
+    }
+
+    /** Printer status from the iMin service. 0 = ready; anything else is a fault. */
+    private String iminStatus() {
+        if (imin == null && !iminReady()) return "no service";
+        try {
+            Object v = invokeAny(imin, "getPrinterStatus");
+            int c = v instanceof Integer ? (Integer) v : -99;
+            switch (c) {
+                case 0: return "0 ready";
+                case -1: return "-1 printer not connected / powered off";
+                case 1: return "1 printer offline";
+                case 3: return "3 print head / cover open";
+                case 4: return "4 printer too hot";
+                case 7: return "7 NO PAPER";
+                case 8: return "8 paper running out";
+                default: return String.valueOf(v);
+            }
+        } catch (Throwable t) { return "unknown (" + root(t) + ")"; }
+    }
+
+    private boolean iminCheck() {
+        String st = iminStatus();
+        if (st.startsWith("0") || st.startsWith("unknown")) return true;
+        lastError = "printer status " + st;
+        return false;
+    }
+
+    /** iMin high-level API: plain text + feed, no raw ESC/POS. */
+    private boolean iminText(byte[] raw) {
+        try {
+            String text = plain(raw);
+            try { invokeAny(imin, "printText", text, null); }
+            catch (NoSuchMethodException e) { invokeAny(imin, "printText", text); }
+            try { invokeAny(imin, "printAndFeedPaper", 120); } catch (Throwable ignored) { }
+            try { invokeAny(imin, "partialCut"); } catch (Throwable ignored) { }
+            return iminCheck();
+        } catch (Throwable t) { lastError = "iMin text: " + root(t); return false; }
+    }
+
+    /** Strip ESC/POS control sequences, keep the printable text. */
+    private static String plain(byte[] raw) {
+        ByteArrayOutputStream o = new ByteArrayOutputStream();
+        for (int i = 0; i < raw.length; i++) {
+            int c = raw[i] & 0xFF;
+            if (c == 0x1B || c == 0x1D) {
+                int n = i + 1 < raw.length ? raw[i + 1] & 0xFF : 0;
+                if (c == 0x1B && n == 0x40) i += 1;
+                else if (c == 0x1B && n == 0x70) i += 4;
+                else i += 2;
+                continue;
+            }
+            if (c == 0x0A || c >= 0x20) o.write(c);
+        }
+        return new String(o.toByteArray(), enc());
+    }
+
+    /** Older iMin SDK (IminPrintUtils) talking straight to the printer over SPI or USB. */
+    private boolean iminOldReady(String type) {
+        if (iminOld != null && type.equals(iminOldType)) return true;
+        try {
+            Class<?> k = Class.forName("com.imin.printerlib.IminPrintUtils");
+            Object u = k.getMethod("getInstance", Context.class).invoke(null, ctx);
+            Class<?> ct = Class.forName("com.imin.printerlib.IminPrintUtils$PrintConnectType");
+            Object e = null;
+            for (Object c : ct.getEnumConstants()) if (c.toString().equalsIgnoreCase(type)) e = c;
+            if (e == null) { lastError = "iMin " + type + " not supported by SDK"; return false; }
+            k.getMethod("initPrinter", ct).invoke(u, e);
+            Thread.sleep(800);
+            try {
+                Object st = k.getMethod("getPrinterStatus", ct).invoke(u, e);
+                if (st instanceof Integer && (Integer) st != 0) { lastError = "iMin " + type + " status " + st; return false; }
+            } catch (NoSuchMethodException ignored) { }
+            iminOld = u; iminOldType = type;
+            return true;
+        } catch (Throwable t) { lastError = "iMin " + type + ": " + root(t); return false; }
     }
 
     private boolean hasIminService() {
@@ -294,11 +384,13 @@ public class PrinterBridge {
             + "; route=" + (route == null ? "none" : route);
         if ("bt".equals(route)) s += "; printer=" + btName;
         if (route == null && !lastError.isEmpty()) s += "; lastError=" + lastError;
+        if (route != null && route.startsWith("imin")) s += "; status=" + iminStatus();
+        s += "; services=" + printerPackages();
         return s;
     }
 
     private byte[] slip(String rt) {
-        String label = "sunmi".equals(rt) ? "ROUTE: SUNMI SERVICE" : "imin".equals(rt) ? "ROUTE: IMIN SERVICE" : "ROUTE: BLUETOOTH";
+        String label = "ROUTE: " + rt.toUpperCase();
         ByteArrayOutputStream b = new ByteArrayOutputStream();
         int[] head = { 0x1B, 0x40, 0x1B, 0x61, 0x01, 0x1B, 0x45, 0x01, 0x1D, 0x21, 0x11 };
         for (int x : head) b.write(x);

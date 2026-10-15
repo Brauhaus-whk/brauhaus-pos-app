@@ -7,8 +7,8 @@ android {
         applicationId 'com.lockandkeyhome.brauhauspos'
         minSdk 24
         targetSdk 34
-        versionCode 6
-        versionName '1.3.2'
+        versionCode 7
+        versionName '1.3.3'
     }
     // One fixed signing key, so every build installs over the last one.
     signingConfigs {
