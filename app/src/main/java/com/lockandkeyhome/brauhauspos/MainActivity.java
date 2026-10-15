@@ -11,6 +11,7 @@ import android.os.Build;
 import android.os.Bundle;
 import android.graphics.Color;
 import android.net.http.SslError;
+import android.webkit.ConsoleMessage;
 import android.webkit.CookieManager;
 import android.webkit.RenderProcessGoneDetail;
 import android.webkit.SslErrorHandler;
@@ -38,7 +39,7 @@ import java.util.List;
  *   window.BrauhausScan       QR scanner + NFC reader for cashless cards (ScanBridge)
  */
 public class MainActivity extends Activity {
-    static final String VERSION = "1.3.1";
+    static final String VERSION = "1.3.2";
     static final String HOME = "https://brauhauspos.lockandkeyhome.com/";
     static final String HOST = "brauhauspos.lockandkeyhome.com";
     private static final int REQ_SCAN = 4711;
@@ -61,6 +62,8 @@ public class MainActivity extends Activity {
     private NfcAdapter nfc;
     private boolean nfcWanted = false;
     private boolean resumed = false;
+    /* First script errors from the page, shown if it stays empty. */
+    private final StringBuilder jsErrors = new StringBuilder();
 
     @Override
     protected void onCreate(Bundle state) {
@@ -93,6 +96,13 @@ public class MainActivity extends Activity {
         }).start();
 
         web.setWebChromeClient(new WebChromeClient() {
+            @Override public boolean onConsoleMessage(ConsoleMessage m) {
+                if (m.messageLevel() == ConsoleMessage.MessageLevel.ERROR && jsErrors.length() < 600) {
+                    String src = m.sourceId() == null ? "" : m.sourceId().replaceAll(".*/", "");
+                    jsErrors.append(m.message()).append(" (").append(src).append(':').append(m.lineNumber()).append(")\n");
+                }
+                return super.onConsoleMessage(m);
+            }
             /* Lets the POS use the camera inside the app (only our own site). */
             @Override public void onPermissionRequest(final PermissionRequest r) {
                 Uri o = r.getOrigin();
@@ -137,12 +147,25 @@ public class MainActivity extends Activity {
             }
 
             @Override
+            public void onPageStarted(WebView v, String url, android.graphics.Bitmap icon) {
+                if (url != null && url.startsWith(HOME)) jsErrors.setLength(0);
+            }
+
+            @Override
             public void onPageFinished(WebView v, String url) {
-                /* If the page loaded but drew nothing (script failed), say so after 8 s. */
+                /* Slow handhelds can need a while to draw a big page. Only call it
+                   empty after 25 s, and then show the script errors and the WebView
+                   version so the cause is on screen. */
+                if (url == null || !url.startsWith(HOME)) return;
                 v.postDelayed(() -> v.evaluateJavascript(
-                    "(function(){var b=document.body;return b&&b.innerText.trim().length>0?'ok':'blank'})()",
-                    res -> { if ("\"blank\"".equals(res) && url != null && url.startsWith(HOME))
-                        show(v, "The page loaded but stayed empty.", "Update Android System WebView / Chrome in the app store, then try again. " + url); }), 8000);
+                    "(function(){var b=document.body;return b&&(b.innerText.trim().length>0||b.querySelector('canvas,img,input,button'))?'ok':'blank'})()",
+                    res -> {
+                        if (!"\"blank\"".equals(res) || !url.equals(v.getUrl())) return;
+                        String wv = "unknown";
+                        try { android.content.pm.PackageInfo p = WebView.getCurrentWebViewPackage(); if (p != null) wv = p.packageName + " " + p.versionName; } catch (Throwable ignored) { }
+                        String errs = jsErrors.length() > 0 ? jsErrors.toString() : "no script errors reported";
+                        show(v, "The page loaded but stayed empty.", "WebView: " + wv + "<br>" + errs.replace("\n", "<br>"));
+                    }), 25000);
             }
         });
 
@@ -215,7 +238,7 @@ public class MainActivity extends Activity {
     /* -- helpers -- */
 
     private void show(WebView v, String title, String detail) {
-        v.loadDataWithBaseURL(null, screen(title, detail.replace("<", "&lt;")), "text/html", "utf-8", null);
+        v.loadDataWithBaseURL(null, screen(title, detail.replace("<br>", "\u0001").replace("<", "&lt;").replace("\u0001", "<br>")), "text/html", "utf-8", null);
     }
 
     private void js(String code) { if (web != null) web.evaluateJavascript(code, null); }
