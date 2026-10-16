@@ -1,5 +1,24 @@
 plugins { id 'com.android.application' }
 
+/* iMin SDK 1.0 (Swift 1 and other Android 11 iMins): not on Maven, so the
+   build downloads iMin's own files from their official GitHub repository. */
+def iminRaw = 'https://raw.githubusercontent.com/iminsoftware/imin_printer/main/android/'
+def iminFiles = [
+    'libs/iminPrinterSDK-15_V1.3.2_2505261539.jar'          : 'libs/iminPrinterSDK1.jar',
+    'src/main/jniLibs/arm64-v8a/libserial_port_imin.so'     : 'src/main/jniLibs/arm64-v8a/libserial_port_imin.so',
+    'src/main/jniLibs/armeabi-v7a/libserial_port_imin.so'   : 'src/main/jniLibs/armeabi-v7a/libserial_port_imin.so',
+    'src/main/jniLibs/x86/libserial_port_imin.so'           : 'src/main/jniLibs/x86/libserial_port_imin.so',
+    'src/main/jniLibs/x86_64/libserial_port_imin.so'        : 'src/main/jniLibs/x86_64/libserial_port_imin.so',
+]
+iminFiles.each { src, dst ->
+    def f = file(dst)
+    if (!f.exists() || f.length() == 0) {
+        f.parentFile.mkdirs()
+        println "Downloading iMin file ${src}"
+        new URL(iminRaw + src).withInputStream { i -> f.withOutputStream { it << i } }
+    }
+}
+
 android {
     namespace 'com.lockandkeyhome.brauhauspos'
     compileSdk 34
@@ -7,8 +26,8 @@ android {
         applicationId 'com.lockandkeyhome.brauhauspos'
         minSdk 24
         targetSdk 34
-        versionCode 8
-        versionName '1.3.4'
+        versionCode 9
+        versionName '1.3.5'
     }
     // One fixed signing key, so every build installs over the last one.
     signingConfigs {
@@ -33,8 +52,10 @@ android {
 dependencies {
     // Sunmi built-in printer service (Maven Central)
     implementation 'com.sunmi:printerlibrary:1.0.24'
-    // iMin printer SDK (JitPack)
-    implementation 'com.github.iminsoftware:IminPrinterLibrary:V1.0.0.15'
+    // iMin printer SDK 2.0 (JitPack) + SDK 1.0 jar for Android 11 iMins (downloaded above)
+    implementation 'com.github.iminsoftware:IminPrinterLibrary:V2.0.0.18'
+    implementation files('libs/iminPrinterSDK1.jar')
+    implementation 'io.reactivex.rxjava2:rxandroid:2.1.1'
     // QR scanner for cashless cards (Maven Central)
     implementation 'com.journeyapps:zxing-android-embedded:4.3.0'
 }

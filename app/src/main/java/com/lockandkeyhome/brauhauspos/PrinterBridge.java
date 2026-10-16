@@ -44,7 +44,7 @@ public class PrinterBridge {
     private static final String TAG = "BrauhausPrint";
     private static final UUID SPP = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB");
     private static final String SUNMI_PKG = "woyou.aidlservice.jiuiv5";
-    private static final String[] ROUTES = { "sunmi", "imin", "imintext", "iminspi", "iminusb", "bt" };
+    private static final String[] ROUTES = { "sunmi", "iminusb", "iminspi", "imin", "imintext", "bt" };
 
     private final Context ctx;
     private final SharedPreferences prefs;
@@ -178,7 +178,7 @@ public class PrinterBridge {
                 case "imin":  rawCall(imin, data);  return iminCheck();
                 case "imintext": return iminText(data);
                 case "iminspi":
-                case "iminusb":  rawCall(iminOld, data); return true;
+                case "iminusb":  return iminOldSend(data);
                 case "bt":    return btSend(data);
                 default: return false;
             }
@@ -270,6 +270,16 @@ public class PrinterBridge {
         } catch (Throwable t) { lastError = "iMin text: " + root(t); return false; }
     }
 
+    /** SDK 1.0: raw ESC/POS if the library has it, else plain text + feed. */
+    private boolean iminOldSend(byte[] data) throws Throwable {
+        try { rawCall(iminOld, data); }
+        catch (NoSuchMethodException e) {
+            invokeAny(iminOld, "printText", plain(data));
+        }
+        try { invokeAny(iminOld, "printAndFeedPaper", 100); } catch (Throwable ignored) { }
+        return true;
+    }
+
     /** Strip ESC/POS control sequences, keep the printable text. */
     private static String plain(byte[] raw) {
         ByteArrayOutputStream o = new ByteArrayOutputStream();
@@ -297,6 +307,7 @@ public class PrinterBridge {
             Object e = null;
             for (Object c : ct.getEnumConstants()) if (c.toString().equalsIgnoreCase(type)) e = c;
             if (e == null) { lastError = "iMin " + type + " not supported by SDK"; return false; }
+            try { k.getMethod("resetDevice").invoke(u); } catch (NoSuchMethodException ignored) { }
             k.getMethod("initPrinter", ct).invoke(u, e);
             Thread.sleep(800);
             try {
