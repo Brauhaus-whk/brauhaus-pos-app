@@ -39,9 +39,11 @@ import java.util.List;
  *   window.BrauhausScan       QR scanner + NFC reader for cashless cards (ScanBridge)
  */
 public class MainActivity extends Activity {
-    static final String VERSION = "1.3.3";
+    static final String VERSION = "1.3.4";
     static final String HOME = "https://brauhauspos.lockandkeyhome.com/";
     static final String HOST = "brauhauspos.lockandkeyhome.com";
+    /* Chrome < 85 cannot parse ??= and friends. */
+    static boolean OLD_WEBVIEW = true;
     private static final int REQ_SCAN = 4711;
 
     /* A visible screen for every way loading can fail, so the device never
@@ -78,6 +80,13 @@ public class MainActivity extends Activity {
         s.setDatabaseEnabled(true);
         s.setMediaPlaybackRequiresUserGesture(false);
         s.setUserAgentString(s.getUserAgentString() + " BrauhausPOS-iMin/" + VERSION + " BrauhausPOS/" + VERSION);
+
+        try {
+            android.content.pm.PackageInfo wp = WebView.getCurrentWebViewPackage();
+            int major = wp == null ? 0 : Integer.parseInt(wp.versionName.split("\\.")[0]);
+            OLD_WEBVIEW = major > 0 && major < 90;
+        } catch (Throwable ignored) { OLD_WEBVIEW = true; }
+        s.setCacheMode(WebSettings.LOAD_NO_CACHE);
 
         CookieManager cm = CookieManager.getInstance();
         cm.setAcceptCookie(true);
@@ -119,6 +128,16 @@ public class MainActivity extends Activity {
                 if (isWeb && HOST.equals(u.getHost())) return false;
                 try { startActivity(new Intent(Intent.ACTION_VIEW, u)); } catch (Exception ignored) { }
                 return true;
+            }
+
+            /* Old WebView (iMin): serve the POS page with new JS syntax rewritten. */
+            @Override
+            public WebResourceResponse shouldInterceptRequest(WebView v, WebResourceRequest r) {
+                if (OLD_WEBVIEW && OldWebViewFix.wants(r, HOST)) {
+                    WebResourceResponse fixed = OldWebViewFix.fetch(r);
+                    if (fixed != null) return fixed;
+                }
+                return super.shouldInterceptRequest(v, r);
             }
 
             @Override
