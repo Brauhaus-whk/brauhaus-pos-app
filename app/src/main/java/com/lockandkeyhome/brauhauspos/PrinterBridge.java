@@ -54,6 +54,7 @@ public class PrinterBridge {
 
     private String route;
     private volatile String lastError = "";
+    private volatile String lastJob = "none yet";
 
     private volatile Object sunmi;
     private Object imin;
@@ -85,7 +86,7 @@ public class PrinterBridge {
     @JavascriptInterface public void openCashBox()               { q.execute(() -> { esc(0x1B, 0x70, 0x00, 0x19, 0xFA); flushNow(); }); }
 
     @JavascriptInterface public void printText(final String text) {
-        final String t = text == null ? "\n" : text;
+        final String t = text == null ? "\n" : safe(text);
         q.execute(() -> { byte[] b = t.getBytes(enc()); job.write(b, 0, b.length); later(); });
     }
 
@@ -144,10 +145,19 @@ public class PrinterBridge {
         byte[] data = job.toByteArray();
         job.reset();
         pick();
-        if (route != null && send(route, data)) return;
+        if (route != null && send(route, data)) { lastJob = "printed " + data.length + " bytes via " + route; return; }
+        String first = route;
         route = null;
         pick();
-        if (route != null) send(route, data);
+        if (route != null && send(route, data)) { lastJob = "printed " + data.length + " bytes via " + route + " (" + first + " failed)"; return; }
+        lastJob = "FAILED " + data.length + " bytes: " + (lastError.isEmpty() ? "no printer route works" : lastError);
+    }
+
+    /** Finish the job now and say what really happened (for the POS toast). */
+    @JavascriptInterface public String flushSync() {
+        try {
+            return q.submit(() -> { esc(0x1B, 0x4A, 0x60); flushNow(); return lastJob; }).get(60, TimeUnit.SECONDS);
+        } catch (Throwable t) { return "FAILED: " + t; }
     }
 
     /* -- route selection -- */
@@ -272,7 +282,14 @@ public class PrinterBridge {
 
     /** SDK 1.0: raw ESC/POS if the library has it, else plain text + feed. */
     private boolean iminOldSend(byte[] data) throws Throwable {
-        try { rawCall(iminOld, data); }
+        try {
+            /* Small pieces: the Swift 1 USB link drops long jobs sent in one go. */
+            for (int i = 0; i < data.length; i += 256) {
+                byte[] part = java.util.Arrays.copyOfRange(data, i, Math.min(data.length, i + 256));
+                rawCall(iminOld, part);
+                if (data.length > 256) Thread.sleep(40);
+            }
+        }
         catch (NoSuchMethodException e) {
             invokeAny(iminOld, "printText", plain(data));
         }
@@ -394,6 +411,7 @@ public class PrinterBridge {
             + "; pinned=" + prefs.getString("route", "auto")
             + "; route=" + (route == null ? "none" : route);
         if ("bt".equals(route)) s += "; printer=" + btName;
+        s += "; lastJob=" + lastJob;
         if (route == null && !lastError.isEmpty()) s += "; lastError=" + lastError;
         if (route != null && route.startsWith("imin")) s += "; status=" + iminStatus();
         s += "; services=" + printerPackages();
@@ -465,6 +483,13 @@ public class PrinterBridge {
         while (t.getCause() != null && t.getCause() != t) t = t.getCause();
         String m = t.getMessage();
         return t.getClass().getSimpleName() + (m == null ? "" : ": " + m);
+    }
+
+    /** Thermal printers start in code page 437: spell German letters safely. */
+    static String safe(String t) {
+        return t.replace("\u00e4", "ae").replace("\u00f6", "oe").replace("\u00fc", "ue").replace("\u00c4", "Ae").replace("\u00d6", "Oe").replace("\u00dc", "Ue")
+                .replace("\u00df", "ss").replace("\u00e9", "e").replace("\u00e8", "e").replace("\u20ac", "EUR").replace("\u2013", "-").replace("\u2014", "-")
+                .replace("\u2019", "'").replace("\u201c", "\"").replace("\u201d", "\"").replace("\u2022", "*");
     }
 
     private static Charset enc() {
