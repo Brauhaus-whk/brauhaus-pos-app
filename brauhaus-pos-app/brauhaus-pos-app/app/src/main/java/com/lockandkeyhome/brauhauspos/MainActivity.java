@@ -39,7 +39,7 @@ import java.util.List;
  *   window.BrauhausScan       QR scanner + NFC reader for cashless cards (ScanBridge)
  */
 public class MainActivity extends Activity {
-    static final String VERSION = "1.3.9";
+    static final String VERSION = "1.3.10";
     static final String HOME = "https://brauhauspos.lockandkeyhome.com/";
     static final String HOST = "brauhauspos.lockandkeyhome.com";
     /* Chrome < 85 cannot parse ??= and friends. */
