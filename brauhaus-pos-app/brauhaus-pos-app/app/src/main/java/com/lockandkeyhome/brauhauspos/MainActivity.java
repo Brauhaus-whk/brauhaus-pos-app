@@ -39,7 +39,7 @@ import java.util.List;
  *   window.BrauhausScan       QR scanner + NFC reader for cashless cards (ScanBridge)
  */
 public class MainActivity extends Activity {
-    static final String VERSION = "1.3.8";
+    static final String VERSION = "1.3.9";
     static final String HOME = "https://brauhauspos.lockandkeyhome.com/";
     static final String HOST = "brauhauspos.lockandkeyhome.com";
     /* Chrome < 85 cannot parse ??= and friends. */
@@ -91,6 +91,25 @@ public class MainActivity extends Activity {
         CookieManager cm = CookieManager.getInstance();
         cm.setAcceptCookie(true);
         cm.setAcceptThirdPartyCookies(web, true);
+
+        /* Crash reporter: if the app ever closes on its own, the reason is
+           shown on the next start so it can be photographed and fixed. */
+        final android.content.SharedPreferences crashPrefs = getSharedPreferences("crash", MODE_PRIVATE);
+        final Thread.UncaughtExceptionHandler prev = Thread.getDefaultUncaughtExceptionHandler();
+        Thread.setDefaultUncaughtExceptionHandler((th, ex) -> {
+            try {
+                String trace = android.util.Log.getStackTraceString(ex);
+                crashPrefs.edit().putString("last", "App " + VERSION + " crashed:\n" + trace.substring(0, Math.min(1800, trace.length()))).commit();
+            } catch (Throwable ignored) { }
+            if (prev != null) prev.uncaughtException(th, ex);
+        });
+        String lastCrash = crashPrefs.getString("last", null);
+        if (lastCrash != null) {
+            crashPrefs.edit().remove("last").apply();
+            new android.app.AlertDialog.Builder(this).setTitle("The app closed last time")
+                .setMessage("Please send a photo of this to support.\n\n" + lastCrash)
+                .setPositiveButton("OK", null).show();
+        }
 
         askPermissions();
 
@@ -229,12 +248,18 @@ public class MainActivity extends Activity {
     /* -- QR scanner (ZXing) -- */
 
     void startQrScan() {
+        if (Build.VERSION.SDK_INT >= 23 && checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(new String[] { Manifest.permission.CAMERA }, 2);
+            Toast.makeText(this, "Allow the camera, then tap QR scan again", Toast.LENGTH_LONG).show();
+            js("window.__bhScanCancel && window.__bhScanCancel()");
+            return;
+        }
         try {
             ScanOptions o = new ScanOptions();
             o.setDesiredBarcodeFormats(ScanOptions.QR_CODE, ScanOptions.CODE_128, ScanOptions.DATA_MATRIX, ScanOptions.EAN_13);
             o.setPrompt("Scan the guest's card");
             o.setBeepEnabled(true);
-            o.setOrientationLocked(false);
+            o.setOrientationLocked(true);
             Intent i = o.createScanIntent(this);
             i.setClass(this, CaptureActivity.class);
             startActivityForResult(i, REQ_SCAN);
