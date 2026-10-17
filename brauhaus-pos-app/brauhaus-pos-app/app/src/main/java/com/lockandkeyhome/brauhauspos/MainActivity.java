@@ -39,7 +39,7 @@ import java.util.List;
  *   window.BrauhausScan       QR scanner + NFC reader for cashless cards (ScanBridge)
  */
 public class MainActivity extends Activity {
-    static final String VERSION = "1.3.7";
+    static final String VERSION = "1.3.8";
     static final String HOME = "https://brauhauspos.lockandkeyhome.com/";
     static final String HOST = "brauhauspos.lockandkeyhome.com";
     /* Chrome < 85 cannot parse ??= and friends. */
@@ -100,7 +100,10 @@ public class MainActivity extends Activity {
         /* WebView ignores window.print(). This hands the page to Android's
            print system, the same one Chrome uses (iMin print plugin). */
         web.addJavascriptInterface(new Object() {
-            @android.webkit.JavascriptInterface public void printPage(final String title) {
+            @android.webkit.JavascriptInterface public void printPage(final String title) { printSized(title, 0, 0); }
+
+            /* Paper exactly as long as the receipt, so the roll stops right after the last line. */
+            @android.webkit.JavascriptInterface public void printSized(final String title, final double wMm, final double hMm) {
                 runOnUiThread(() -> {
                     try {
                         android.print.PrintManager pm = (android.print.PrintManager) getSystemService(PRINT_SERVICE);
@@ -108,6 +111,10 @@ public class MainActivity extends Activity {
                         android.print.PrintAttributes.Builder b = new android.print.PrintAttributes.Builder()
                             .setColorMode(android.print.PrintAttributes.COLOR_MODE_MONOCHROME)
                             .setMinMargins(android.print.PrintAttributes.Margins.NO_MARGINS);
+                        if (wMm > 20 && hMm > 20) {
+                            int w = (int) Math.round(wMm / 25.4 * 1000), h = (int) Math.round(hMm / 25.4 * 1000);
+                            b.setMediaSize(new android.print.PrintAttributes.MediaSize("brauhaus_receipt", "Receipt " + Math.round(wMm) + " mm", w, h).asPortrait());
+                        }
                         pm.print(name, web.createPrintDocumentAdapter(name), b.build());
                     } catch (Throwable t) {
                         Toast.makeText(MainActivity.this, "Print: " + t.getMessage(), Toast.LENGTH_LONG).show();
@@ -194,7 +201,7 @@ public class MainActivity extends Activity {
                    empty after 25 s, and then show the script errors and the WebView
                    version so the cause is on screen. */
                 if (url == null || !url.startsWith(HOME)) return;
-                v.evaluateJavascript("window.print=function(){try{BrauhausApp.printPage(document.title)}catch(e){}};", null);
+                v.evaluateJavascript("window.print=function(){try{var z=window.__bhPrintSize||{};BrauhausApp.printSized(document.title,z.w||0,z.h||0)}catch(e){}};", null);
                 v.postDelayed(() -> v.evaluateJavascript(
                     "(function(){var b=document.body;return b&&(b.innerText.trim().length>0||b.querySelector('canvas,img,input,button'))?'ok':'blank'})()",
                     res -> {

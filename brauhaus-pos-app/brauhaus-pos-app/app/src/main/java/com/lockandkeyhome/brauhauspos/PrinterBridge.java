@@ -131,7 +131,7 @@ public class PrinterBridge {
     /* -- job handling -- */
 
     private void add(final int... b) { q.execute(() -> { esc(b); later(); }); }
-    private void endJob() { q.execute(() -> { esc(0x1B, 0x4A, 0x60); flushNow(); }); }
+    private void endJob() { q.execute(() -> { esc(0x1B, 0x4A, 0x50); flushNow(); }); }
     private void esc(int... b) { for (int x : b) job.write(x & 0xFF); }
 
     private void later() {
@@ -156,7 +156,7 @@ public class PrinterBridge {
     /** Finish the job now and say what really happened (for the POS toast). */
     @JavascriptInterface public String flushSync() {
         try {
-            return q.submit(() -> { esc(0x1B, 0x4A, 0x60); flushNow(); return lastJob; }).get(60, TimeUnit.SECONDS);
+            return q.submit(() -> { esc(0x1B, 0x4A, 0x50); flushNow(); return lastJob; }).get(60, TimeUnit.SECONDS);
         } catch (Throwable t) { return "FAILED: " + t; }
     }
 
@@ -293,7 +293,6 @@ public class PrinterBridge {
         catch (NoSuchMethodException e) {
             invokeAny(iminOld, "printText", plain(data));
         }
-        try { invokeAny(iminOld, "printAndFeedPaper", 100); } catch (Throwable ignored) { }
         return true;
     }
 
